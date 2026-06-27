@@ -6,7 +6,7 @@ $$
 \log\left(\frac{P_i}{P_{referencia}}\right)=\beta_i^t \bar{x}
 $$
 
-donde $\bar{x}$ es el vector de variables explicativas y $\beta_i$ es el vector de coeficientes asociado a la categoría $i$. Notemos que cada categoría tiene sus propios coeficientes, por lo que el efecto de una variable explicativa puede ser distinto según qué categoría estemos comparando contra la referencia.
+donde $\bar{x}$ es el vector de variables explicativas y $\beta_i$ es el vector de coeficientes asociado a la categoría $i$. Notemos que cada categoría tiene sus propios coeficientes, por lo que el efecto de una variable explicativa puede ser distinto según que categoría estemos comparando contra la referencia.
 
 La función logaritmo actúa como función de link. Su rol es transformar un cociente de probabilidades, que solo puede tomar valores positivos, en un valor real. De forma equivalente, podemos escribir:
 
@@ -14,20 +14,42 @@ $$
 \frac{P_i}{P_{referencia}}=\exp(\beta_i^t \bar{x})
 $$
 
-Así, cada categoría tiene asociado un score positivo dado por la exponencial de una combinación lineal. Sin embargo, estos scores todavía no son probabilidades, porque no necesariamente suman 1. Para obtener probabilidades válidas, se normalizan mediante una función tipo softmax, tomando la categoria de referencia a 'K' y usando que la suma de probabilidades es 1.
-$$
+Así, cada categoría tiene asociado un score positivo dado por la exponencial de una combinación lineal. Sin embargo, estos scores todavía no son probabilidades, porque no necesariamente suman 1. Para obtener probabilidades válidas, se normalizan mediante una función tipo softmax, tomando la categoria de referencia a 'K' y usando que la suma de probabilidades es 1. $$
 P_i=P_{K} \exp(\beta_i^t \bar{x})
-$$
-$$
+$$ $$
 P_K.(1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})) = 1
-$$
-$$
+$$ $$
 P_K = \frac{1}{1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})}
 $$
 
-Luego el resto de las $P_i$ es:
-$$
+Luego el resto de las $P_i$ es: $$
 P_i = \frac{\exp(\beta_i^t \bar{x})}{1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})}
 \quad \text{para } i=1,\dots,K-1
+$$ De esta manera, todas las probabilidades son positivas y además suman 1.
+
+```{r nnet_ajuste}
+library(nnet)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+
+datos <- read_csv('refugio.csv')
+
+modelo <- multinom(
+    desenlace ~ age_years + dog + sterilized + sexo,
+    data = datos
+)
+summary(modelo)
+```
+
+Primero, estamos viendo los $\beta$ del modelo multinomial escrito de esta forma:
+
 $$
-De esta manera, todas las probabilidades son positivas y además suman 1.
+\log\left(\frac{P_i}{P_{referencia}}\right)=\beta_i^t \bar{x}
+$$
+
+Pero para interpretar los resultados preferimos esta expresión:$$
+\frac{P_i}{P_{referencia}}=\exp(\beta_i^t \bar{x})
+$$
+
+De esta manera podemos ver que para las variables explicativas con coeficiente de signo negativo, al aumentar su valor, estan aumentando la probabilidad de referencia, para nuestro caso la de adopción. Mientras que las variables explicativas con coeficientes de signo postivo, al aumentar, aumentan la probabilidad de la categoria i-esima y disminuyen la de adopcion. Con esto en mente podemos ver que al aumentar la edad sube la probabilidad de muerte y baja la de adopción o que los perros son mas propensos a ser adoptados que a morir en el refugio. Observando la columna age_years vemos que la edad esta nunca empuja hacia la adopcion, mientras que el ser macho podría ser un buen factor para ser adoptado.
