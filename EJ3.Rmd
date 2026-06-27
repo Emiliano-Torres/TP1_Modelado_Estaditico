@@ -1,0 +1,33 @@
+El modelo multinomial permite estimar las probabilidades de ocurrencia de $K$ resultados distintos y finitos. Definimos $P_i$ como la probabilidad de ocurrencia del $i$-ésimo evento, con $i=1,\dots,K$. Como estas probabilidades deben sumar 1, no podemos modelarlas de manera completamente independiente: conocer $K-1$ de ellas determina automáticamente la restante.
+
+Por este motivo, en el modelo multinomial se suele elegir una categoría de referencia. Luego, para cada categoría $i$ distinta de la referencia, se modela el cociente entre su probabilidad y la probabilidad de la categoría base:
+
+$$
+\log\left(\frac{P_i}{P_{referencia}}\right)=\beta_i^t \bar{x}
+$$
+
+donde $\bar{x}$ es el vector de variables explicativas y $\beta_i$ es el vector de coeficientes asociado a la categoría $i$. Notemos que cada categoría tiene sus propios coeficientes, por lo que el efecto de una variable explicativa puede ser distinto según qué categoría estemos comparando contra la referencia.
+
+La función logaritmo actúa como función de link. Su rol es transformar un cociente de probabilidades, que solo puede tomar valores positivos, en un valor real. De forma equivalente, podemos escribir:
+
+$$
+\frac{P_i}{P_{referencia}}=\exp(\beta_i^t \bar{x})
+$$
+
+Así, cada categoría tiene asociado un score positivo dado por la exponencial de una combinación lineal. Sin embargo, estos scores todavía no son probabilidades, porque no necesariamente suman 1. Para obtener probabilidades válidas, se normalizan mediante una función tipo softmax, tomando la categoria de referencia a 'K' y usando que la suma de probabilidades es 1.
+$$
+P_i=P_{K} \exp(\beta_i^t \bar{x})
+$$
+$$
+P_K.(1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})) = 1
+$$
+$$
+P_K = \frac{1}{1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})}
+$$
+
+Luego el resto de las $P_i$ es:
+$$
+P_i = \frac{\exp(\beta_i^t \bar{x})}{1+\sum_{j=1}^{K-1}\exp(\beta_j^t \bar{x})}
+\quad \text{para } i=1,\dots,K-1
+$$
+De esta manera, todas las probabilidades son positivas y además suman 1.
