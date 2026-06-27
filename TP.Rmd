@@ -489,7 +489,7 @@ modelo <- multinom(
     desenlace ~ age_years + dog + sterilized + sexo,
     data = datos
 )
-summary(modelo)
+summary(modelo)$coefficients
 ```
 
 Primero, estamos viendo los $\beta$ del modelo multinomial escrito de esta forma:
@@ -510,7 +510,7 @@ De esta manera podemos ver que para las variables explicativas con coeficiente d
 
 # Ejercicio 4
 
-Para estimar la curva de Kaplan-Meier, vamos a definir un par de conceptos. Definimos $T$ como el tiempo hasta la adopción $\lambda_j=P(T=t_j|T\geq t_{j-1})$ que es la probabilidad del animal de ser adoptado en el instante $t_j$ dado que no fue adoptado hasta $t_{j-1}$. Vamos a estimar estos $\lambda_j$ mediante su estimador de máxima verosimilud. 
+Para estimar la curva de Kaplan-Meier, vamos a definir un par de conceptos.Primero estamos discretizando la muestra usando la funcion ceiling, tomamos como bucket los días del años. Definimos $T$ como el tiempo hasta la adopción $\lambda_j=P(T\in I_j|T\geq t_{j-1})$ que es la probabilidad del animal de ser adoptado en el inrtervalo $I_j = [t_j,t_{j-1}]$ dado que no fue adoptado hasta $t_{j-1}$. Vamos a estimar estos $\lambda_j$ mediante su estimador de máxima verosimilud. 
 
 $$\widehat{\lambda_j}=\frac{\#adoptados_j}{\#observados_j}$$
 
@@ -527,12 +527,12 @@ for (i in 1:nrow(datos)) {
   desenlace <- datos$desenlace[i]
   los <- ceiling(datos$los[i])
 
-  if (desenlace == "adopción") {
-    nj[1:los] <- nj[1:los] + 1
+  if (desenlace == "Adopcion") {
+    nj[1:los] <- nj[1:los] + rep(1,los)
     mj[los] <- mj[los] + 1
   } else {
     if (los > 1) {
-      nj[1:(los - 1)] <- nj[1:(los - 1)] + 1
+      nj[1:(los - 1)] <- nj[1:(los - 1)] + rep(1,los-1)
     }
   }
 }
@@ -554,6 +554,8 @@ print(paste("Probabilidad de ser adoptado a los 60 días:", 1 - s_estimado[60]))
 print(paste("Probabilidad de ser adoptado a los 90 días:", 1 - s_estimado[90]))
 print(paste("Probabilidad de ser adoptado a los 180 días:", 1 - s_estimado[180]))
 ```
+Luego del cálculo del estimador Kaplan-Meier obtubimos que la probabilidades de ser adoptados luego de 30,60,90 y 180 días son 0.56, 0,78, 0.89 y 0,97 respectivamente.
+
 Recordemos la definición planteada en clase del modelo de hazard proporcionales.
 $$
 \lambda_i(t \mid x) = h_0(t)e^{\beta^T x}
@@ -569,7 +571,7 @@ cox <- coxph(
   data = datos
 )
 
-summary(cox)
+summary(cox)$coefficients
 
 ```
 
