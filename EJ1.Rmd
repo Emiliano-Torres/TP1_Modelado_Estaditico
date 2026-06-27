@@ -1,0 +1,226 @@
+---
+title: "TP1 — Modelado Estadístico"
+subtitle: "Austin Animal Center"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: true
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  message   = FALSE,
+  warning   = FALSE,
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(scales)
+library(patchwork)
+```
+
+```{r carga}
+df <- read_csv("refugio.csv")
+```
+
+```{r sanity-check, include=FALSE}
+# Estructura general
+glimpse(df)
+summary(df)
+
+# Consistencia entre animal_type y dog
+table(df$animal_type, df$dog)
+
+# Valores faltantes
+colSums(is.na(df))
+
+# ¿Es los siempre entero?
+sum(df$los != floor(df$los))
+```
+
+```{r metricas, include=FALSE}
+# Medianas y percentiles que se usan en el texto
+med_los <- df |>
+  group_by(desenlace) |>
+  summarise(mediana = median(los), p75 = quantile(los, 0.75))
+
+med_devolucion    <- med_los |> filter(desenlace == "Devolucion") |> pull(mediana)
+med_adopcion      <- med_los |> filter(desenlace == "Adopcion")   |> pull(mediana)
+p75_adopcion      <- med_los |> filter(desenlace == "Adopcion")   |> pull(p75)
+
+med_edad_no_ester <- median(df$age_years[df$sterilized == 0])
+med_edad_ester    <- median(df$age_years[df$sterilized == 1])
+
+n_no_enteros      <- sum(df$los != floor(df$los))
+pct_no_enteros    <- percent(n_no_enteros / nrow(df), accuracy = 0.1)
+
+colores_desenlace <- c(
+  "Adopcion"      = "#66C2A5",
+  "Transferencia" = "#FC8D62",
+  "Devolucion"    = "#8DA0CB",
+  "Muerte"        = "#E78AC3"
+)
+```
+
+## Exploración inicial
+
+El dataset contiene **`r format(nrow(df), big.mark = ".")` animales** (
+`r format(sum(df$animal_type == "Dog"), big.mark = ".")` perros y
+`r format(sum(df$animal_type == "Cat"), big.mark = ".")` gatos).
+Tras una inspección, se verificó la consistencia entre
+`animal_type` y `dog`, y no se detectaron valores faltantes en ninguna variable.
+Se observa además que `r pct_no_enteros` de los registros tienen valores no
+enteros en `los`, lo que indica que esta variable no se contabilizó como días completos.
+
+```{r figura-desenlaces, fig.width=5.5, fig.height=3, fig.cap="Distribución de los cuatro desenlaces posibles."}
+
+df |>
+  count(desenlace) |>
+  mutate(
+    porcentaje = n / sum(n),
+    desenlace  = fct_reorder(desenlace, n)
+  ) |>
+  ggplot(aes(x = n, y = desenlace, fill = desenlace)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(
+    aes(label = paste0(comma(n), "  (", percent(porcentaje, accuracy = 0.1), ")")),
+    hjust = -0.05, size = 3
+  ) +
+  scale_x_continuous(
+    labels = comma,
+    expand = expansion(mult = c(0, 0.28))
+  ) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(
+    title = "Distribución de desenlaces",
+    x     = "Cantidad de animales",
+    y     = NULL
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(panel.grid.major.y = element_blank())
+```
+
+La adopción es el desenlace más frecuente (53% de los casos), seguida por
+transferencia (28,6%). La muerte representa el desenlace menos frecuente (3,7%).
+
+```{r figura-demografia, fig.width=7, fig.height=3.8, fig.cap="Izquierda: distribución de la edad al ingreso. Derecha: composición de desenlaces por tipo de animal."}
+
+# --- Panel izquierdo: histograma de edad ---
+p1 <- df |>
+  ggplot(aes(x = age_years)) +
+  geom_histogram(
+    binwidth = 0.5,
+    fill     = "#4E1A8A",
+    color    = "white",
+    alpha    = 0.85
+  ) +
+  scale_x_continuous(breaks = seq(0, 24, 4)) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Edad al ingreso",
+    x     = "Edad (años)",
+    y     = "Cantidad de animales"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(panel.grid.major.x = element_blank())
+
+# --- Panel derecho: desenlace por tipo de animal ---
+p2 <- df |>
+  count(animal_type, desenlace) |>
+  group_by(animal_type) |>
+  mutate(
+    prop        = n / sum(n),
+    animal_type = recode(animal_type, "Dog" = "Perro", "Cat" = "Gato")
+  ) |>
+  ggplot(aes(x = animal_type, y = prop, fill = desenlace)) +
+  geom_col(width = 0.55) +
+  geom_text(
+    aes(label = percent(prop, accuracy = 0.1)),
+    position = position_stack(vjust = 0.5),
+    size     = 3,
+    color    = "white",
+    fontface = "bold"
+  ) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(
+    title = "Desenlace por tipo de animal",
+    x     = NULL,
+    y     = "Proporción",
+    fill  = "Desenlace"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(panel.grid.major.x = element_blank())
+
+p1 + p2
+```
+
+La distribución de edad (Figura 2, izquierda) es marcadamente asimétrica:
+la mayoría de los animales ingresa en sus primeros meses de vida.
+
+En cuanto al tipo de animal (Figura 2, derecha), la composición de desenlaces
+difiere notablemente: las devoluciones son un fenómeno casi exclusivo de los
+perros (23,1% vs 4% en gatos), mientras que las transferencias tienen mayor
+peso relativo en los felinos (35,8% vs 23%).
+
+```{r figura-tiempo, fig.width=7, fig.height=3.8, fig.cap="Izquierda: tiempo de estadía por desenlace en escala logarítmica. Derecha: edad al ingreso según condición de esterilización."}
+
+# --- Panel izquierdo: boxplot de los por desenlace ---
+p3 <- df |>
+  mutate(desenlace = fct_reorder(desenlace, los, median)) |>
+  ggplot(aes(x = desenlace, y = los + 0.1, fill = desenlace)) +
+  geom_boxplot(
+    outlier.alpha = 0.08,
+    outlier.size  = 0.4,
+    show.legend   = FALSE
+  ) +
+  scale_y_log10(
+    labels = comma,
+    breaks = c(0.1, 1, 7, 30, 90, 365)
+  ) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(
+    title = "Tiempo de estadía por desenlace",
+    x     = NULL,
+    y     = "Días en el refugio (escala log)"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 20, hjust = 1)
+  )
+
+# --- Panel derecho: edad por esterilización ---
+p4 <- df |>
+  mutate(
+    esterilizado = ifelse(sterilized == 1, "Esterilizado", "No esterilizado")
+  ) |>
+  ggplot(aes(x = esterilizado, y = age_years, fill = esterilizado)) +
+  geom_boxplot(outlier.alpha = 0.08, outlier.size = 0.4, show.legend = FALSE) +
+  scale_y_continuous(breaks = seq(0, 24, 4)) +
+  scale_fill_manual(values = c("Esterilizado" = "#4ABA8A", "No esterilizado" = "#C0565A")) +
+  labs(
+    title = "Edad según esterilización",
+    x     = NULL,
+    y     = "Edad (años)"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(panel.grid.major.x = element_blank())
+
+p3 + p4
+```
+
+El tiempo de estadía (Figura 3, izquierda) varía según el
+desenlace. Las devoluciones son las más rápidas
+(mediana = `r round(med_devolucion, 1)` días), mientras que las adopciones
+presentan la mayor dispersión y demora (mediana = `r round(med_adopcion, 1)`
+días, con el 25% de los casos superando los `r round(p75_adopcion, 0)` días). Es importante notar que el grafico se encuentra en escala logarítmica, lo que permite visualizar mejor la dispersión de los datos.
+
+Finalmente (Figura 3, derecha), se observa una relación
+entre esterilización y edad: los animales no esterilizados al ingreso son
+predominantemente cachorros (mediana = `r round(med_edad_no_ester * 12, 0)`
+meses), mientras que los esterilizados son adultos
+(mediana = `r round(med_edad_ester, 0)` años).

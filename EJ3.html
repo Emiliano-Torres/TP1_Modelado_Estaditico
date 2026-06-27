@@ -370,7 +370,7 @@ base:</p>
 variables explicativas y <span class="math inline">\(\beta_i\)</span> es
 el vector de coeficientes asociado a la categoría <span class="math inline">\(i\)</span>. Notemos que cada categoría tiene sus
 propios coeficientes, por lo que el efecto de una variable explicativa
-puede ser distinto según qué categoría estemos comparando contra la
+puede ser distinto según que categoría estemos comparando contra la
 referencia.</p>
 <p>La función logaritmo actúa como función de link. Su rol es
 transformar un cociente de probabilidades, que solo puede tomar valores
@@ -397,6 +397,84 @@ P_i = \frac{\exp(\beta_i^t \bar{x})}{1+\sum_{j=1}^{K-1}\exp(\beta_j^t
 \quad \text{para } i=1,\dots,K-1
 \]</span> De esta manera, todas las probabilidades son positivas y
 además suman 1.</p>
+<pre class="r"><code>library(nnet)
+library(ggplot2)
+library(dplyr)</code></pre>
+<pre><code>## 
+## Adjuntando el paquete: &#39;dplyr&#39;</code></pre>
+<pre><code>## The following objects are masked from &#39;package:stats&#39;:
+## 
+##     filter, lag</code></pre>
+<pre><code>## The following objects are masked from &#39;package:base&#39;:
+## 
+##     intersect, setdiff, setequal, union</code></pre>
+<pre class="r"><code>library(tidyverse)</code></pre>
+<pre><code>## ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+## ✔ forcats   1.0.1     ✔ stringr   1.5.1
+## ✔ lubridate 1.9.5     ✔ tibble    3.3.0
+## ✔ purrr     1.1.0     ✔ tidyr     1.3.1
+## ✔ readr     2.2.0</code></pre>
+<pre><code>## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+## ✖ dplyr::filter() masks stats::filter()
+## ✖ dplyr::lag()    masks stats::lag()
+## ℹ Use the conflicted package (&lt;http://conflicted.r-lib.org/&gt;) to force all conflicts to become errors</code></pre>
+<pre class="r"><code>datos &lt;- read_csv(&#39;refugio.csv&#39;)</code></pre>
+<pre><code>## Rows: 137806 Columns: 8
+## ── Column specification ────────────────────────────────────────────────────────
+## Delimiter: &quot;,&quot;
+## chr (4): animal_type, sexo, breed_main, desenlace
+## dbl (4): dog, sterilized, age_years, los
+## 
+## ℹ Use `spec()` to retrieve the full column specification for this data.
+## ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.</code></pre>
+<pre class="r"><code>modelo &lt;- multinom(
+    desenlace ~ age_years + dog + sterilized + sexo,
+    data = datos
+)</code></pre>
+<pre><code>## # weights:  24 (15 variable)
+## initial  value 191039.680728 
+## iter  10 value 144612.463174
+## iter  20 value 137767.956708
+## final  value 137744.559611 
+## converged</code></pre>
+<pre class="r"><code>summary(modelo)</code></pre>
+<pre><code>## Call:
+## multinom(formula = desenlace ~ age_years + dog + sterilized + 
+##     sexo, data = datos)
+## 
+## Coefficients:
+##               (Intercept)  age_years        dog sterilized    sexoMacho
+## Devolucion     -3.4747739 0.16620766  1.7009305  1.2524363  0.273606391
+## Muerte         -2.8917130 0.24281216 -0.7075794 -0.3782199  0.258220482
+## Transferencia  -0.4905999 0.08090993 -0.4257549 -0.2241343 -0.002062547
+## 
+## Std. Errors:
+##               (Intercept)   age_years        dog sterilized  sexoMacho
+## Devolucion     0.02582119 0.003122218 0.02393564 0.02058795 0.01763917
+## Muerte         0.02725511 0.004620294 0.03022470 0.04236217 0.02956384
+## Transferencia  0.01115315 0.003120335 0.01283847 0.02029064 0.01257725
+## 
+## Residual Deviance: 275489.1 
+## AIC: 275519.1</code></pre>
+<p>Primero, estamos viendo los <span class="math inline">\(\beta\)</span> del modelo multinomial escrito de
+esta forma:</p>
+<p><span class="math display">\[
+\log\left(\frac{P_i}{P_{referencia}}\right)=\beta_i^t \bar{x}
+\]</span></p>
+<p>Pero para interpretar los resultados preferimos esta expresión:<span class="math display">\[
+\frac{P_i}{P_{referencia}}=\exp(\beta_i^t \bar{x})
+\]</span></p>
+<p>De esta manera podemos ver que para las variables explicativas con
+coeficiente de signo negativo, al aumentar su valor, estan aumentando la
+probabilidad de referencia, para nuestro caso la de adopción. Mientras
+que las variables explicativas con coeficientes de signo postivo, al
+aumentar, aumentan la probabilidad de la categoria i-esima y disminuyen
+la de adopcion. Con esto en mente podemos ver que al aumentar la edad
+sube la probabilidad de muerte y baja la de adopción o que los perros
+son mas propensos a ser adoptados que a morir en el refugio. Observando
+la columna age_years vemos que la edad esta nunca empuja hacia la
+adopcion, mientras que el ser macho podría ser un buen factor para ser
+adoptado.</p>
 
 
 
