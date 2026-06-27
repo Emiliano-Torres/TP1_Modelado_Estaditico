@@ -225,14 +225,14 @@ datos |>
 ```
 
 La Figura 5 muestra que el estimador crudo tiene mucha dispersión alrededor de
-la diagonal — con $m = `r m`$ la tasa cruda es muy ruidosa. El estimador de
+la diagonal con $m = `r m`$ la tasa cruda es muy ruidosa. El estimador de
 Empirical Bayes reduce considerablemente esa dispersión, con un ECM de
-`r round(ecm_eb, 4)` vs `r round(ecm_crudo, 4)` del estimador crudo —
+`r round(ecm_eb, 4)` vs `r round(ecm_crudo, 4)` del estimador crudo
 una reducción del `r percent(reduccion, accuracy = 0.1)`.
 
 La Figura 6 ilustra el mecanismo: todos los puntos se acercan a la línea
 horizontal de la media de la prior (`r percent(media_prior, accuracy = 0.1)`).
 Las razas con tasa cruda baja son corregidas hacia arriba y las de tasa cruda
 alta hacia abajo. Como $m$ es fijo para todas las razas, el shrinkage es
-uniforme — a diferencia del caso clásico donde el encogimiento sería mayor para
+uniforme a diferencia del caso clásico donde el encogimiento sería mayor para
 grupos con menos observaciones.
