@@ -1,0 +1,661 @@
+---
+title: "TP1 - Modelado Estadistico"
+author: "Emiliano Torres y Federico Leonardis Ayala"
+date: "2026-06-27"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["float"]
+  html_document:
+    df_print: paged
+subtitle: Austin Animal Center
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  message   = FALSE,
+  warning   = FALSE,
+  fig.align = "center",
+  fig.pos   = "H"
+)
+
+library(tidyverse)
+library(scales)
+library(patchwork)
+library(knitr)
+library(kableExtra)
+library(nnet)
+library(survival)
+library(ggcorrplot)
+```
+
+```{r carga}
+df <- read_csv("refugio.csv") |>
+  mutate(
+    desenlace = factor(desenlace,
+                       levels = c("Adopcion", "Devolucion", "Transferencia", "Muerte")),
+    sexo      = factor(sexo)
+  )
+```
+
+```{r paleta-global}
+colores_desenlace <- c(
+  "Adopcion"      = "#66C2A5",
+  "Transferencia" = "#FC8D62",
+  "Devolucion"    = "#8DA0CB",
+  "Muerte"        = "#E78AC3"
+)
+
+tema_tp <- theme_minimal(base_size = 9) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 10),
+    plot.subtitle = element_text(color = "gray40", size = 8)
+  )
+```
+
+```{r sanity-check, include=FALSE}
+glimpse(df)
+summary(df)
+table(df$animal_type, df$dog)
+colSums(is.na(df))
+sum(df$los != floor(df$los))
+```
+
+```{r metricas-ej1, include=FALSE}
+n_total  <- nrow(df)
+n_perros <- sum(df$dog == 1)
+n_gatos  <- sum(df$dog == 0)
+
+med_los <- df |>
+  group_by(desenlace) |>
+  summarise(mediana = median(los), p75 = quantile(los, 0.75), .groups = "drop")
+
+med_devolucion <- med_los |> filter(desenlace == "Devolucion") |> pull(mediana)
+med_adopcion   <- med_los |> filter(desenlace == "Adopcion")   |> pull(mediana)
+p75_adopcion   <- med_los |> filter(desenlace == "Adopcion")   |> pull(p75)
+
+n_no_enteros   <- sum(df$los != floor(df$los))
+pct_no_enteros <- percent(n_no_enteros / n_total, accuracy = 0.1)
+```
+
+
+El Austin Animal Center es el refugio municipal más grande de Estados Unidos. Analizar sus registros nos puede ayudar a identificar qué perfil de animal tiene mayores chances de adopción, que tasas de adopcion tiene el refugio y que tan rápido se adoptan los animales según sus caracteristicas (y en comparación a otros posibles desenlaces). 
+
+## 1. Exploración inicial
+
+El dataset del refugio contiene
+**`r format(n_total, big.mark = " ")` animales**
+(`r format(n_perros, big.mark = " ")` perros y
+`r format(n_gatos, big.mark = " ")` gatos), sin valores faltantes.
+
+```{r tabla-resumen-ej1}
+tibble(
+  Variable = c(
+    "Edad (mediana, años)",
+    "Edad (máx, años)",
+    "Estadía (mediana, días)",
+    "Estadía (máx, días)",
+    "Esterilizados (%)",
+    "Machos (%)"
+  ),
+  Valor = c(
+    round(median(df$age_years), 1),
+    round(max(df$age_years), 1),
+    round(median(df$los), 1),
+    round(max(df$los), 1),
+    round(mean(df$sterilized) * 100, 1),
+    round(mean(df$sexo == "Macho") * 100, 1)
+  ) |> as.character()
+) |>
+  kable(
+    caption  = "Resumen de las variables principales.",
+    align    = c("l", "r"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(latex_options = c("hold_position"), font_size = 9)
+```
+
+```{r figura-desenlaces, fig.width=5.5, fig.height=2.5, fig.cap="Distribución de los cuatro desenlaces posibles."}
+df |>
+  count(desenlace) |>
+  mutate(
+    porcentaje = n / sum(n),
+    desenlace  = fct_reorder(desenlace, n)
+  ) |>
+  ggplot(aes(x = n, y = desenlace, fill = desenlace)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(
+    aes(label = paste0(comma(n), "  (", percent(porcentaje, accuracy = 0.1), ")")),
+    hjust = -0.05, size = 3
+  ) +
+  scale_x_continuous(labels = comma, expand = expansion(mult = c(0, 0.28))) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(title = "Distribución de desenlaces", x = "Cantidad de animales", y = NULL) +
+  tema_tp +
+  theme(panel.grid.major.y = element_blank())
+```
+
+La Figura \ref{fig:figura-desenlaces} muestra que la adopción es el desenlace más frecuente (53% de los casos), seguida por
+transferencia (28,6%). La muerte es el menos frecuente (3,7%).
+
+```{r figura-demografia, fig.width=7, fig.height=3, fig.cap="Izquierda: distribución de la edad al ingreso. Derecha: composición de desenlaces por tipo de animal."}
+p1 <- df |>
+  ggplot(aes(x = age_years)) +
+  geom_histogram(binwidth = 0.5, fill = "#4E1A8A", color = "white", alpha = 0.85) +
+  scale_x_continuous(breaks = seq(0, 24, 4)) +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Edad al ingreso", x = "Edad (años)", y = "Cantidad de animales") +
+  tema_tp +
+  theme(panel.grid.major.x = element_blank())
+
+p2 <- df |>
+  count(animal_type, desenlace) |>
+  group_by(animal_type) |>
+  mutate(
+    prop        = n / sum(n),
+    animal_type = recode(animal_type, "Dog" = "Perro", "Cat" = "Gato")
+  ) |>
+  ggplot(aes(x = animal_type, y = prop, fill = desenlace)) +
+  geom_col(width = 0.55) +
+  geom_text(
+    aes(label = percent(prop, accuracy = 0.1)),
+    position = position_stack(vjust = 0.5),
+    size = 3, color = "white", fontface = "bold"
+  ) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(title = "Desenlace por tipo de animal", x = NULL, y = "Proporción", fill = "Desenlace") +
+  tema_tp +
+  theme(panel.grid.major.x = element_blank())
+
+p1 + p2
+```
+
+La Figura \ref{fig:figura-demografia} muestra que la distribución de edad es marcadamente asimétrica: la mayoría de los animales
+ingresa en sus primeros meses de vida. Los desenlaces difieren notablemente entre
+especies: las devoluciones son casi exclusivas de perros (23,1% vs 4% en gatos),
+mientras que las transferencias tienen más peso relativo en felinos (35,8% vs 23%).
+
+```{r figura-tiempo-y-corr, fig.width=7, fig.height=3.5, fig.cap="Izquierda: tiempo de estadía por desenlace (escala logarítmica). Derecha: correlaciones de Pearson entre variables numéricas y binarias del dataset (para variables 0/1, la correlación de Pearson coincide con el coeficiente phi)."}
+p3 <- df |>
+  mutate(desenlace = fct_reorder(desenlace, los, median)) |>
+  ggplot(aes(x = desenlace, y = los + 0.1, fill = desenlace)) +
+  geom_boxplot(outlier.alpha = 0.08, outlier.size = 0.4, show.legend = FALSE) +
+  scale_y_log10(labels = comma, breaks = c(0.1, 1, 7, 30, 90, 365)) +
+  scale_fill_manual(values = colores_desenlace) +
+  labs(
+    title = "Tiempo de estadía por desenlace",
+    x     = NULL,
+    y     = "Días en el refugio (escala log)"
+  ) +
+  tema_tp +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x        = element_text(angle = 15, hjust = 1)
+  )
+
+vars_num <- df |>
+  mutate(sexo_macho = as.integer(sexo == "Macho")) |>
+  select(
+    `Edad`       = age_years,
+    `Esteril.`   = sterilized,
+    `Perro`      = dog,
+    `Macho`      = sexo_macho,
+    `Estadía`    = los
+  )
+
+cor_mat <- cor(vars_num, method = "pearson")
+
+p4 <- ggcorrplot(
+  cor_mat,
+  method   = "square",
+  type     = "lower",
+  lab      = TRUE,
+  lab_size = 2.8,
+  colors   = c("#C0565A", "white", "#4E9A8A"),
+  title    = "Correlaciones (Pearson)",
+  ggtheme  = tema_tp
+) +
+  theme(
+    legend.key.size  = unit(0.35, "cm"),
+    legend.text      = element_text(size = 5),
+    legend.title     = element_text(size = 5)
+  )
+
+p3 + p4
+```
+
+En la Figura \ref{fig:figura-tiempo-y-corr}, el tiempo varía según el desenlace: las devoluciones son las más rápidas (mediana =
+`r round(med_devolucion, 1)` días), mientras que las adopciones demoran más y con
+mayor dispersión (mediana = `r round(med_adopcion, 1)` días; el 25% supera los
+`r round(p75_adopcion, 0)` días).
+
+La correlación más fuerte es entre esterilización y edad (r = 0.52): los
+cachorros ingresan predominantemente sin esterilizar, lo cual es esperable dado
+que la esterilización se realiza a partir de cierta edad. El resto de las
+correlaciones son débiles, lo que indica que las variables aportan información
+relativamente independiente al modelo.
+
+## 2. Estimación de la tasa de adopción por raza
+
+```{r eb-calculo, include=FALSE}
+# 2a. Tasa verdadera por raza (>= 100 animales)
+tasas_verdaderas <- df |>
+  group_by(breed_main) |>
+  summarise(
+    total     = n(),
+    adoptados = sum(desenlace == "Adopcion"),
+    tasa_real = adoptados / total,
+    .groups   = "drop"
+  ) |>
+  filter(total >= 100)
+
+n_razas <- nrow(tasas_verdaderas)
+
+# Composicion perros/gatos en el subset: hay que ir al df original
+pct_perro_sub <- df |>
+  filter(breed_main %in% tasas_verdaderas$breed_main) |>
+  summarise(p = mean(dog)) |>
+  pull(p)
+
+# 2b. Muestra chica de m animales por raza
+m <- 15
+set.seed(67)
+
+muestras <- tasas_verdaderas |>
+  select(breed_main) |>
+  mutate(
+    datos_muestra = map(breed_main, function(raza) {
+      df |>
+        filter(breed_main == raza) |>
+        slice_sample(n = m) |>
+        summarise(adoptados_m = sum(desenlace == "Adopcion"), m = n())
+    })
+  ) |>
+  unnest(datos_muestra) |>
+  mutate(tasa_cruda = adoptados_m / m)
+
+datos_eb <- tasas_verdaderas |>
+  inner_join(muestras, by = "breed_main")
+
+# 2c. Prior Beta ajustada por MLE sobre tasas muestrales
+tasas_para_fit <- pmax(pmin(datos_eb$tasa_cruda, 1 - 1e-6), 1e-6)
+
+fit_prior <- MASS::fitdistr(
+  x       = tasas_para_fit,
+  densfun = dbeta,
+  start   = list(shape1 = 3, shape2 = 3)
+)
+
+alpha0      <- fit_prior$estimate["shape1"]
+beta0       <- fit_prior$estimate["shape2"]
+media_prior <- alpha0 / (alpha0 + beta0)
+
+datos_eb <- datos_eb |>
+  mutate(tasa_eb = (alpha0 + adoptados_m) / (alpha0 + beta0 + m))
+
+# 2d. ECM
+ecm_crudo <- mean((datos_eb$tasa_cruda - datos_eb$tasa_real)^2)
+ecm_eb    <- mean((datos_eb$tasa_eb    - datos_eb$tasa_real)^2)
+reduccion  <- (ecm_crudo - ecm_eb) / ecm_crudo
+```
+
+Queremos estimar la tasa de adopción de cada raza. La estimación "obvia" es la
+tasa cruda: adoptados sobre total. Estudiamos si conviene usar esa tasa o el
+estimador de Empirical Bayes.
+
+### Tasa verdadera por raza
+
+Definimos la tasa "verdadera" de cada raza como su proporción de adopciones
+calculada sobre todos los animales del dataset. Para que esta referencia sea
+confiable, nos quedamos con las razas que tienen al menos 100 animales,
+resultando en **`r n_razas` razas**
+(`r percent(pct_perro_sub, accuracy = 0.1)` perros,
+`r percent(1 - pct_perro_sub, accuracy = 0.1)` gatos  el subset está
+balanceado entre especies, por lo que las conclusiones aplican a ambas).
+
+```{r figura-tasas-verdaderas, fig.width=5.5, fig.height=2.2, fig.cap="Distribución de la tasa verdadera de adopción entre las 120 razas con al menos 100 animales."}
+tasas_verdaderas |>
+  ggplot(aes(x = tasa_real)) +
+  geom_histogram(bins = 25, fill = "#4E9A8A", color = "white", alpha = 0.85) +
+  scale_x_continuous(labels = percent, limits = c(0, 1)) +
+  labs(
+    title = "Distribución de la tasa verdadera de adopción por raza",
+    x     = "Tasa de adopción (toda la data)",
+    y     = "Cantidad de razas"
+  ) +
+  tema_tp +
+  theme(panel.grid.major.x = element_blank())
+```
+
+La Figura \ref{fig:figura-tasas-verdaderas} muestra que la distribución de tasas verdaderas es aproximadamente unimodal y concentrada
+entre 40% y 70%, con media
+`r percent(mean(tasas_verdaderas$tasa_real), accuracy = 0.1)`. Esta forma
+justifica el uso de una distribución Beta como prior.
+
+### Simulación y comparación de estimadores
+
+Para simular la situación de poca data, tomamos una muestra aleatoria de
+$m = `r m`$ animales por raza y calculamos la **tasa cruda** (adoptados / $m$).
+Elegimos $m = 15$ como un escenario de muestra muy chica donde la estimación
+cruda es ruidosa pero el shrinkage tiene margen para mejorarla.
+
+Ajustamos una prior $\text{Beta}(\alpha_0, \beta_0)$ sobre las tasas muestrales
+por máxima verosimilitud (MLE), obteniendo $\alpha_0 = `r round(alpha0, 2)`$ y
+$\beta_0 = `r round(beta0, 2)`$ (media: `r percent(media_prior, accuracy = 0.1)`).
+El estimador de Empirical Bayes combina prior y datos:
+
+$$\hat{p}^{EB}_i = \frac{\alpha_0 + \text{adoptados}_i}{\alpha_0 + \beta_0 + m}$$
+
+Este estimador aplica *shrinkage*: encoge las tasas extremas hacia la media de
+la prior. Como $m$ es fijo para todas las razas, el shrinkage es uniforme 
+a diferencia del caso clásico donde grupos con menos observaciones serían
+encogidos más fuertemente.
+
+```{r figura-comparacion-ecm, fig.width=6.5, fig.height=3, fig.cap="Estimaciones vs tasa verdadera para ambos estimadores (línea punteada = estimación perfecta). El EB reduce visiblemente la dispersión alrededor de la diagonal."}
+ecm_label_crudo <- sprintf("Crudo  (ECM = %.4f)", ecm_crudo)
+ecm_label_eb    <- sprintf("Empirical Bayes  (ECM = %.4f)", ecm_eb)
+
+datos_eb |>
+  pivot_longer(
+    cols = c(tasa_cruda, tasa_eb),
+    names_to = "estimador", values_to = "estimacion"
+  ) |>
+  mutate(
+    estimador = recode(estimador,
+      "tasa_cruda" = ecm_label_crudo,
+      "tasa_eb"    = ecm_label_eb
+    )
+  ) |>
+  ggplot(aes(x = tasa_real, y = estimacion, color = estimador)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "gray30", linewidth = 0.6) +
+  facet_wrap(~estimador, ncol = 2) +
+  scale_x_continuous(labels = percent) +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("#C0565A", "#4E9A8A")) +
+  labs(
+    title = "Comparación de estimadores: crudo vs Empirical Bayes",
+    x     = "Tasa verdadera",
+    y     = "Estimación"
+  ) +
+  tema_tp +
+  theme(legend.position = "none", strip.text = element_text(size = 7.5))
+```
+
+La Figura \ref{fig:figura-comparacion-ecm} muestra que el estimador EB reduce el ECM de `r round(ecm_crudo, 4)` a `r round(ecm_eb, 4)`,
+una mejora del `r percent(reduccion, accuracy = 0.1)`. La dispersión alrededor
+de la diagonal se reduce notablemente: el estimador crudo produce errores grandes
+en ambas direcciones, mientras que el EB mantiene las estimaciones mucho más
+cerca de la identidad.
+
+```{r figura-shrinkage, fig.width=5.5, fig.height=3.2, fig.cap="Mecanismo de shrinkage: el estimador EB encoge todas las tasas crudas hacia la media de la prior (línea punteada). Puntos por encima de la diagonal fueron corregidos hacia arriba; por debajo, hacia abajo."}
+datos_eb |>
+  ggplot(aes(x = tasa_cruda, y = tasa_eb)) +
+  geom_point(aes(color = log10(total)), alpha = 0.75, size = 1.8) +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "gray30", linewidth = 0.6) +
+  geom_hline(yintercept = media_prior,
+             linetype = "dotted", color = "gray50", linewidth = 0.5) +
+  annotate("text", x = 0.04, y = media_prior + 0.035,
+           label = sprintf("Media de la prior (%.2f)", media_prior),
+           size = 2.8, color = "gray40", hjust = 0) +
+  scale_x_continuous(labels = percent) +
+  scale_y_continuous(labels = percent) +
+  scale_color_viridis_c(option = "viridis", end = 0.9,
+                        name = "log10(n\nraza)") +
+  labs(
+    title    = "Shrinkage: estimador crudo vs Empirical Bayes",
+    subtitle = sprintf("Prior Beta(%.2f, %.2f)", alpha0, beta0),
+    x        = "Tasa cruda (m = 15)",
+    y        = "Estimador EB"
+  ) +
+  tema_tp +
+  theme(legend.key.size = unit(0.35, "cm"),
+        legend.text     = element_text(size = 7))
+```
+
+En la Figura \ref{fig:figura-shrinkage}, todos los puntos se acercan a la línea horizontal de la media de la prior
+(`r percent(media_prior, accuracy = 0.1)`): las razas con tasa cruda alta son
+corregidas hacia abajo y las de tasa cruda baja hacia arriba. Como $m$ es fijo
+para todas las razas, el shrinkage es uniforme  a diferencia del caso clásico
+donde grupos con menos observaciones serían encogidos más fuertemente.
+
+## 3. Modelando los desenlaces
+
+```{r multinom-ajuste, include=FALSE}
+df_modelo <- df |>
+  mutate(desenlace = relevel(factor(desenlace), ref = "Adopcion"))
+
+modelo_multinom <- multinom(
+  desenlace ~ age_years + dog + sterilized + sexo,
+  data  = df_modelo,
+  trace = FALSE
+)
+
+coefs     <- summary(modelo_multinom)$coefficients
+coefs_exp <- exp(coefs)
+```
+
+Nos interesa estudiar los posibles desenlaces de los animales del refugio. En lugar de ajustar una regresión logística por desenlace lo cual ignoraría que las cuatro probabilidades deben sumar 1, elegimos el modelo multinomial que las estima en
+conjunto. 
+
+El modelo multinomial permite estimar las probabilidades de $K$ resultados distintos. Definimos $P_i$ como la probabilidad del $i$-ésimo evento.
+Como estas probabilidades suman 1, no pueden modelarse de forma completamente independiente: conocer $K-1$ de ellas determina la restante.
+
+Por eso se elige una categoría de referencia (en nuestro caso, Adopción) y se modela el cociente entre cada categoría y la referencia:
+
+$$
+\log\!\left(\frac{P_i}{P_{\text{Adopción}}}\right) = \beta_i^{\top} \bar{x}
+$$
+
+La función logarítmo actúa como función de link: transforma un cociente positivo en un valor real. De forma equivalente:
+
+$$
+\frac{P_i}{P_{\text{Adopción}}} = \exp(\beta_i^{\top} \bar{x})
+$$
+
+Cada categoría tiene sus propios coeficientes, de modo que una variable puede tener efectos distintos según qué desenlace se compare contra la adopción. Al exponenciar el coeficiente obtenemos el odds ratio (razón de ventajas) del desenlace $i$ frente a la adopción. Un $\exp(\beta) = 2$ para una variable significa que, al aumentar esta en una unidad, la ventaja relativa del desenlace $i$ frente a la adopción se duplica (no que su probabilidad absoluta lo haga).
+
+Los scores así obtenidos se normalizan vía softmax para obtener probabilidades válidas que sumen 1:
+
+$$
+P_K = \frac{1}{1 + \sum_{j=1}^{K-1} \exp(\beta_j^{\top} \bar{x})}, \qquad
+P_i = \frac{\exp(\beta_i^{\top} \bar{x})}{1 + \sum_{j=1}^{K-1} \exp(\beta_j^{\top} \bar{x})}
+$$
+
+```{r tabla-coefs-exp}
+coefs_exp |>
+  as.data.frame() |>
+  rownames_to_column("Desenlace") |>
+  rename(
+    "Intercepto"   = `(Intercept)`,
+    "Edad (años)"  = age_years,
+    "Perro"        = dog,
+    "Esterilizado" = sterilized,
+    "Sexo (macho)" = sexoMacho
+  ) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  kable(
+    caption  = "Odds ratios $\\exp(\\beta)$ del modelo multinomial (categoría de referencia: Adopción). Valores $> 1$ indican que aumentar la variable favorece al desenlace $i$ por encima de la adopción; valores $< 1$ indican lo contrario.",
+    booktabs = TRUE,
+    escape   = FALSE,
+    align    = c("l", rep("r", 5))
+  ) |>
+  kable_styling(latex_options = c("hold_position", "scale_down"), font_size = 9)
+```
+
+**Edad:** el odds ratio es mayor que 1 para los tres desenlaces no-adopción,
+especialmente para Muerte
+($\exp(\beta) = `r round(coefs_exp["Muerte","age_years"], 3)`$): por cada año
+adicional, las chances relativas de morir en el refugio frente a ser adoptado aumentan
+un `r round((coefs_exp["Muerte","age_years"] - 1) * 100, 1)`%.
+La edad juega en contra de la adopción.
+
+**Perro:** ser perro multiplica por
+`r round(coefs_exp["Devolucion","dog"], 2)` las chances de devolución vs
+adopción  (razonable, ya que la devolución implica tener dueño previo, fenómeno
+casi exclusivo de los perros). En cambio, ser perro *reduce* las chances de muerte
+($\exp(\beta) = `r round(coefs_exp["Muerte","dog"], 3)`$): los perros tienen
+más chances relativas de adopción que los gatos.
+
+**Sexo:** los coeficientes de `Sexo (macho)` son positivos en casi todos los desenlaces pero pequeños. Ser macho inclina levemente la balanza hacia cualquier salida que no sea la adopción.
+
+## 4. ¿Qué tan rápido se adoptan los animales?
+
+Para estudiar esto haremos un analisis de supervivencia. El evento de interés es la adopción; cualquier otro desenlace (transferencia,
+devolución, muerte) se trata como **censura**: sabemos que el animal estuvo en
+el refugio hasta ese momento sin ser adoptado, pero no observamos qué hubiera
+pasado después.
+
+```{r km-calculo, include=FALSE}
+MAX_DIAS <- 365
+
+mj <- rep(0, MAX_DIAS)
+nj <- rep(0, MAX_DIAS)
+
+df_raw <- read_csv("refugio.csv")
+
+for (i in seq_len(nrow(df_raw))) {
+  desenlace_i <- df_raw$desenlace[i]
+  los_i       <- min(ceiling(df_raw$los[i]), MAX_DIAS)
+
+  if (desenlace_i == "Adopcion") {
+    nj[seq_len(los_i)] <- nj[seq_len(los_i)] + 1
+    mj[los_i]          <- mj[los_i] + 1
+  } else {
+    if (los_i > 1) {
+      nj[seq_len(los_i - 1)] <- nj[seq_len(los_i - 1)] + 1
+    }
+  }
+}
+
+lambda_est <- ifelse(nj > 0, mj / nj, 0)
+s_est      <- cumprod(1 - lambda_est)
+
+prob_30  <- 1 - s_est[30]
+prob_60  <- 1 - s_est[60]
+prob_90  <- 1 - s_est[90]
+prob_180 <- 1 - s_est[180]
+```
+
+Definimos $T$ como el tiempo hasta la adopción y
+$\hat{\lambda}_j = \#\text{adoptados}_j / \#\text{en\_riesgo}_j$ como la tasa
+de adopción en el intervalo $j$ entre quienes aún no fueron adoptados.
+La función de supervivencia se estima como el producto acumulado:
+
+$$\hat{S}(t_j) = \prod_{t=1}^{j}(1 - \hat{\lambda}_t)$$
+
+y la probabilidad acumulada de adopción es $1 - \hat{S}(t)$.
+
+```{r figura-km-y-tabla, fig.width=7, fig.height=3.5, fig.cap="Izquierda: curva de Kaplan-Meier para la adopción (resto censurado). Derecha: probabilidades acumuladas en días clave."}
+km_data <- tibble(dia = seq_len(MAX_DIAS), prob = 1 - s_est)
+puntos  <- tibble(
+  dia  = c(30, 60, 90, 180),
+  prob = c(prob_30, prob_60, prob_90, prob_180)
+)
+
+p_km <- km_data |>
+  filter(dia <= 180) |>
+  ggplot(aes(x = dia, y = prob)) +
+  geom_line(color = "#66C2A5", linewidth = 0.9) +
+  geom_vline(xintercept = puntos$dia,
+             linetype = "dashed", color = "gray60", linewidth = 0.35) +
+  geom_point(data = puntos, color = "#C0565A", size = 2.5) +
+  scale_x_continuous(breaks = c(0, 30, 60, 90, 120, 150, 180)) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(
+    title = "Probabilidad acumulada de adopción",
+    x     = "Días en el refugio",
+    y     = "P(adoptado antes de t)"
+  ) +
+  tema_tp
+
+# Tabla embebida como grob
+tabla_km <- puntos |>
+  mutate(prob = percent(prob, accuracy = 0.1)) |>
+  rename(Días = dia, `P(adopción)` = prob) |>
+  gridExtra::tableGrob(rows = NULL,
+    theme = gridExtra::ttheme_minimal(base_size = 8))
+
+p_km + patchwork::wrap_elements(tabla_km) + plot_layout(widths = c(3, 1))
+```
+
+La Figura \ref{fig:figura-km-y-tabla} muestra que la probabilidad de adopción crece rápidamente en los primeros 30 días (56%),
+desacelera a los 90 días (89%) y casi satura a los 180 días (97%). Esto sugiere
+que las intervenciones tempranas tienen
+el mayor impacto potencial.
+
+```{r cox-ajuste, include=FALSE}
+df_cox <- df_raw |>
+  mutate(evento_adopcion = (desenlace == "Adopcion"))
+
+cox <- coxph(
+  Surv(los, evento_adopcion) ~ age_years + dog + sterilized + sexo,
+  data = df_cox
+)
+
+cox_coefs <- summary(cox)$coefficients
+```
+
+Para identificar qué variables aceleran o retrasan la adopción, ajustamos un
+modelo de Cox:
+
+$$\lambda_i(t \mid x) = h_0(t)\, e^{\beta^{\top} x}$$
+
+donde $h_0(t)$ es el hazard base y $e^{\beta} > 1$ implica mayor tasa de
+adopción (adopción más rápida).
+
+--
+
+```{r tabla-cox}
+cox_coefs |>
+  as.data.frame() |>
+  rownames_to_column("Variable") |>
+  mutate(
+    Variable = recode(Variable,
+      "age_years"  = "Edad (años)",
+      "dog"        = "Perro (vs gato)",
+      "sterilized" = "Esterilizado",
+      "sexoMacho"  = "Sexo (macho)"
+    ),
+    across(c(coef, `exp(coef)`, `se(coef)`, z), ~ round(.x, 4)),
+    `Pr(>|z|)` = format.pval(`Pr(>|z|)`, digits = 3, eps = 1e-10)
+  ) |>
+  select(Variable, `exp(coef)`, z, `Pr(>|z|)`) |>
+  kable(
+    col.names = c("Variable", "exp(beta)", "Est. z", "p-valor"),
+    caption   = "Modelo de Cox para tiempo hasta adopción. $\\exp(\\beta) > 1$ implica adopción más rápida.",
+    booktabs  = TRUE,
+    escape    = FALSE,
+    align     = c("l", "r", "r", "r")
+  ) |>
+  kable_styling(latex_options = "hold_position", font_size = 9)
+```
+
+Todos los coeficientes son estadísticamente significativos (p < 0.001).
+**Ser perro** es el factor que más acelera la adopción
+($\exp(\beta) = `r round(cox_coefs["dog","exp(coef)"], 3)`$):
+los perros son adoptados un `r round((cox_coefs["dog","exp(coef)"] - 1) * 100, 1)`%
+más rápido que los gatos en cada momento del tiempo.
+**La edad** es el principal freno
+($\exp(\beta) = `r round(cox_coefs["age_years","exp(coef)"], 3)`$):
+cada año adicional reduce la tasa de adopción instantánea un
+`r round((1 - cox_coefs["age_years","exp(coef)"]) * 100, 1)`%.
+**La esterilización** tiene un efecto positivo pero pequeño
+($\exp(\beta) = `r round(cox_coefs["sterilized","exp(coef)"], 3)`$).
+
+## Conclusiones
+
+El análisis permite trazar un perfil claro del animal con mayores chances de
+adopción en el Austin Animal Center: **perro joven**. La edad es el factor más
+perjudicial en múltiples frentes  aumenta las chances de muerte relativas a la
+adopción (Inciso 3) y retrasa el tiempo hasta ser adoptado (Inciso 4).
+La esterilización ayuda, aunque su efecto es modesto. El Empirical Bayes
+demostró ser una herramienta robusta para estimar tasas con poca data,
+reduciendo el ECM en un `r percent(reduccion, accuracy = 0.1)` respecto al
+estimador crudo. Finalmente, el modelo de supervivencia revela que el 56% de
+las adopciones ocurren en los primeros 30 días, lo que sugiere que la difusión
+temprana de los animales tendría el mayor impacto en las tasas de adopción.
