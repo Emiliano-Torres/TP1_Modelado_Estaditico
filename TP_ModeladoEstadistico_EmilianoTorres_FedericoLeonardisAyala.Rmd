@@ -651,8 +651,8 @@ cada año adicional reduce la tasa de adopción instantánea un
 
 El análisis permite trazar un perfil claro del animal con mayores chances de
 adopción en el Austin Animal Center: **perro joven**. La edad es el factor más
-perjudicial en múltiples frentes  aumenta las chances de muerte relativas a la
-adopción (Inciso 3) y retrasa el tiempo hasta ser adoptado (Inciso 4).
+perjudicial en múltiples frentes (aumenta las chances de muerte relativas a la
+adopción (Inciso 3) y retrasa el tiempo hasta ser adoptado (Inciso 4)).
 La esterilización ayuda, aunque su efecto es modesto. El Empirical Bayes
 demostró ser una herramienta robusta para estimar tasas con poca data,
 reduciendo el ECM en un `r percent(reduccion, accuracy = 0.1)` respecto al
